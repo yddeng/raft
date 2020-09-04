@@ -11,14 +11,6 @@ import (
 	"sync"
 )
 
-type Storage interface {
-	Set(key string, value []byte)
-
-	Get(key string) ([]byte, bool)
-
-	HasData() bool
-}
-
 type MapStorage struct {
 	mu   sync.Mutex
 	m    map[string][]byte

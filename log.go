@@ -2,7 +2,7 @@ package raft
 
 import "log"
 
-var debug = 0
+var debug = 1
 
 func dlog(format string, v ...interface{}) {
 	if debug > 0 {
