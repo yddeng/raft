@@ -28,7 +28,7 @@ func newCommand(name string, data []byte) (Command, error) {
 	// Find the registered command.
 	command := commandTypes[name]
 	if command == nil {
-		return nil, fmt.Errorf("raft.Command: Unregistered command type: %s", name)
+		panic(fmt.Errorf("raft.Command: Unregistered command type: %s", name))
 	}
 
 	// Make a copy of the command.

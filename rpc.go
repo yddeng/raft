@@ -116,6 +116,8 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) (e
 	if req.GetLeaderCommit() > rf.commitIndex {
 		//如果 leaderCommit > commitIndex，令 commitIndex 等于 leaderCommit 和 新日志条目索引值中较小的一个
 		rf.commitIndex = min(req.GetLeaderCommit(), rf.getLastLogIndex())
+		rf.commitNotifyCh <- struct{}{}
+
 	}
 
 	return

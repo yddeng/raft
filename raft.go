@@ -3,6 +3,7 @@ package raft
 import (
 	"fmt"
 	"math/rand"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,6 +29,12 @@ func (this State) String() string {
 
 const NULL string = "null"
 
+type Event struct {
+	Cmd   Command
+	Index int64
+	Term  int64
+}
+
 type Raft struct {
 	sync.Mutex
 	name  string
@@ -52,13 +59,17 @@ type Raft struct {
 	heartbeatTimer *time.Timer
 
 	// handler rpc
-	voteCh      chan bool
-	appendLogCh chan bool
+	voteCh         chan struct{}
+	appendLogCh    chan struct{}
+	commitNotifyCh chan struct{}
 
-	killCh chan bool
+	// eventCh
+	eventCh chan<- Event
+
+	killCh chan struct{}
 }
 
-func Make(name string, peers map[string]string) (rf *Raft) {
+func Make(name string, peers map[string]string, eventCh chan<- Event) (rf *Raft) {
 	rf = new(Raft)
 	rf.name = name
 	rf.peers = make(map[string]*ClientEnd, len(peers))
@@ -71,9 +82,11 @@ func Make(name string, peers map[string]string) (rf *Raft) {
 	rf.nextIndex = make(map[string]int64, len(peers))
 	rf.matchIndex = make(map[string]int64, len(peers))
 	rf.heartbeatTimer = time.NewTimer(1000 * time.Millisecond)
-	rf.voteCh = make(chan bool, 1)
-	rf.appendLogCh = make(chan bool, 1)
-	rf.killCh = make(chan bool, 1)
+	rf.voteCh = make(chan struct{}, 1)
+	rf.appendLogCh = make(chan struct{}, 1)
+	rf.commitNotifyCh = make(chan struct{}, 16)
+	rf.eventCh = eventCh
+	rf.killCh = make(chan struct{}, 1)
 
 	for name, addr := range peers {
 		rf.peers[name] = &ClientEnd{
@@ -83,19 +96,21 @@ func Make(name string, peers map[string]string) (rf *Raft) {
 
 	// 加载
 	rf.loadFromDisk()
-
+	// 启动rpc
 	go rf.startRPCServer()
-
+	// raft loop
 	go rf.loop()
+	// event loop
+	go rf.eventChanLoop()
 	return
 }
 
-func sendCh(ch chan bool) {
+func sendCh(ch chan struct{}) {
 	select {
 	case <-ch:
 	default:
 	}
-	ch <- true
+	ch <- struct{}{}
 }
 
 // 最后的index
@@ -291,19 +306,20 @@ func (rf *Raft) startAppendLog() {
 				rf.nextIndex[name] = req.GetPrevLogIndex() + int64(len(req.GetEntries())) + 1
 				rf.matchIndex[name] = rf.nextIndex[name] - 1
 				// 更新commitIndex，如果被大多数 follower 复制，则提交。
-				length := int64(len(rf.log))
-				for i := rf.commitIndex + 1; i < length; i++ {
-					if rf.log[i].Term == rf.currentTerm {
-						matchCount := 1
-						for name := range rf.peers {
-							if rf.matchIndex[name] >= i {
-								matchCount++
-							}
-						}
-						if matchCount >= len(rf.peers)/2+1 {
-							rf.commitIndex = i
-						}
+				// 排序每一个 follower 的 matchIdx，取位置中间值，就是最大的
+				idxs := make([]int, 0, len(rf.peers))
+				for name := range rf.peers {
+					if name == rf.name {
+						idxs = append(idxs, int(rf.getLastLogIndex()))
+						continue
 					}
+					idxs = append(idxs, int(rf.matchIndex[name]))
+				}
+				sort.Ints(idxs)
+				newCommitIdx := int64(idxs[len(rf.peers)/2])
+				if newCommitIdx > rf.commitIndex {
+					rf.commitIndex = newCommitIdx
+					rf.commitNotifyCh <- struct{}{}
 				}
 			} else {
 				// 在被跟随者拒绝之后，领导人就会减小 nextIndex 值并进行重试。最终 nextIndex 会在某个位置使得领导人和跟随者的日志达成一致。
@@ -328,6 +344,37 @@ func (rf *Raft) startAppendLog() {
 
 		}(name, end, req)
 	}
+}
+
+func (rf *Raft) eventChanLoop() {
+	for {
+		select {
+		case <-rf.killCh:
+			return
+		case <-rf.commitNotifyCh:
+			rf.Lock()
+			savedTerm := rf.currentTerm
+			savedLastApplied := rf.lastApplied
+			var entries []*LogEntry
+			if rf.commitIndex > rf.lastApplied {
+				entries = rf.log[rf.lastApplied+1 : rf.commitIndex+1]
+				rf.lastApplied = rf.commitIndex
+			}
+			rf.Unlock()
+			dlog("commitChanLoop entries=%v, savedLastApplied=%d", entries, savedLastApplied)
+
+			for i, entry := range entries {
+				command, _ := newCommand(entry.GetCommandName(), entry.GetCommand())
+				rf.eventCh <- Event{
+					Cmd:   command,
+					Index: savedLastApplied + int64(i) + 1,
+					Term:  savedTerm,
+				}
+			}
+
+		}
+	}
+	dlog("raft %s commitChanLoop done", rf.name)
 }
 
 func (rf *Raft) Submit(command Command) error {
