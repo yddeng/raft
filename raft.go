@@ -32,14 +32,13 @@ type Raft struct {
 	sync.Mutex
 	name  string
 	peers map[string]*ClientEnd
-
+	//leaderName string
 	state State
 
 	// 所有服务器上持久存在的
 	currentTerm int64       // 服务器最后一次知道的任期号（初始化为 0，持续递增）
 	votedFor    string      // 当前任期内收到选票的候选人ID (没有为NULL)
 	log         []*LogEntry // 日志条目集；每一个条目包含一个用户状态机执行的指令，和收到时的任期号
-	storage     *MapStorage
 
 	// 所有服务器上经常变的
 	commitIndex int64 // 已知的最大的已经被提交的日志条目的索引值
@@ -66,10 +65,9 @@ func Make(name string, peers map[string]string) (rf *Raft) {
 	rf.state = Follower
 	rf.currentTerm = 0
 	rf.votedFor = NULL
-	rf.storage = NewMapStorage("state", name)
 	rf.log = make([]*LogEntry, 0)
-	rf.commitIndex = 0
-	rf.lastApplied = 0
+	rf.commitIndex = -1
+	rf.lastApplied = -1
 	rf.nextIndex = make(map[string]int64, len(peers))
 	rf.matchIndex = make(map[string]int64, len(peers))
 	rf.heartbeatTimer = time.NewTimer(1000 * time.Millisecond)
@@ -140,16 +138,13 @@ func (rf *Raft) loop() {
 		switch state {
 		case Follower, Candidate:
 			electionTime := time.Duration(rand.Intn(100)+300) * time.Millisecond
-			rf.Lock()
 			rf.heartbeatTimer.Reset(electionTime)
-			timeoutCh := rf.heartbeatTimer.C
-			rf.Unlock()
 			select {
 			case <-rf.appendLogCh:
 			case <-rf.voteCh:
 			case <-rf.killCh:
 				return
-			case <-timeoutCh:
+			case <-rf.heartbeatTimer.C:
 				// 如果在超过选举超时时间的情况之前没有收到当前领导人（即该领导人的任期需与这个跟随者的当前任期相同）的心跳/附加日志，或者是给某个候选人投了票，就自己变成候选人（5.2 节)
 				rf.Lock()
 				rf.beCandidate()
@@ -220,13 +215,13 @@ func (rf *Raft) startElection() {
 	var votes int32 = 1
 
 	// 如果接收到大多数服务器的选票，那么就变成领导人
-	for name := range rf.peers {
+	for name, end := range rf.peers {
 		if name == rf.name {
 			continue
 		}
-		go func(name string) {
+		go func(name string, end *ClientEnd) {
 			resp := &RequestVoteResp{}
-			err := rf.sendRequestVote(name, req, resp)
+			err := end.call("Raft.RequestVote", req, resp)
 			if err == nil {
 				dlog("raft %s->%s requestVoteResp req:%v resp:%v ", rf.name, name, req, resp)
 				rf.Lock()
@@ -247,7 +242,7 @@ func (rf *Raft) startElection() {
 					}
 				}
 			}
-		}(name)
+		}(name, end)
 	}
 }
 
@@ -258,7 +253,7 @@ func (rf *Raft) startAppendLog() {
 		return
 	}
 
-	for name := range rf.peers {
+	for name, end := range rf.peers {
 		if name == rf.name {
 			continue
 		}
@@ -273,13 +268,13 @@ func (rf *Raft) startAppendLog() {
 			Entries:      rf.log[idx:],
 		}
 
-		go func(name string, req *AppendEntriesReq) {
+		go func(name string, end *ClientEnd, req *AppendEntriesReq) {
 			resp := &AppendEntriesResp{}
-			if err := rf.sendAppendEntries(name, req, resp); err != nil {
+			if err := end.call("Raft.AppendEntries", req, resp); err != nil {
 				dlog("sendAppendEntries %s", err)
 				return
 			}
-
+			dlog("raft %s->%s appendEntriesResp req:%v resp:%v ", rf.name, name, req, resp)
 			rf.Lock()
 			defer rf.Unlock()
 
@@ -295,12 +290,43 @@ func (rf *Raft) startAppendLog() {
 			if resp.GetSuccess() {
 				rf.nextIndex[name] = req.GetPrevLogIndex() + int64(len(req.GetEntries())) + 1
 				rf.matchIndex[name] = rf.nextIndex[name] - 1
-				//rf.updateCommitIndex() // 更新commitIndex
+				// 更新commitIndex，如果被大多数 follower 复制，则提交。
+				length := int64(len(rf.log))
+				for i := rf.commitIndex + 1; i < length; i++ {
+					if rf.log[i].Term == rf.currentTerm {
+						matchCount := 1
+						for name := range rf.peers {
+							if rf.matchIndex[name] >= i {
+								matchCount++
+							}
+						}
+						if matchCount >= len(rf.peers)/2+1 {
+							rf.commitIndex = i
+						}
+					}
+				}
 			} else {
-
+				// 在被跟随者拒绝之后，领导人就会减小 nextIndex 值并进行重试。最终 nextIndex 会在某个位置使得领导人和跟随者的日志达成一致。
+				if resp.GetConflictTerm() != -1 {
+					lastIndexOfTerm := -1
+					conflictTerm := resp.GetConflictTerm()
+					for i := len(rf.log) - 1; i >= 0; i-- {
+						if rf.log[i].Term == conflictTerm {
+							lastIndexOfTerm = i
+							break
+						}
+					}
+					if lastIndexOfTerm >= 0 {
+						rf.nextIndex[name] = int64(lastIndexOfTerm) + 1
+					} else {
+						rf.nextIndex[name] = resp.GetConflictIndex()
+					}
+				} else {
+					rf.nextIndex[name] = resp.GetConflictIndex()
+				}
 			}
 
-		}(name, req)
+		}(name, end, req)
 	}
 }
 

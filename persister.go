@@ -27,8 +27,6 @@ func (rf *Raft) saveToDisk() {
 }
 
 func (rf *Raft) loadFromDisk() {
-	rf.Lock()
-	defer rf.Unlock()
 
 	filename := path.Join("raft-state", fmt.Sprintf("rf-%s.state", rf.name))
 	data, err := ioutil.ReadFile(filename)

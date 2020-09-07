@@ -19,9 +19,9 @@ message AppendEntriesReq{
 
 message  AppendEntriesResp {
     int64 Term        = 1; // 任期号，用于领导人更新自己
-    int64 Index       = 2;
-    int64 CommitIndex = 3;
-    bool   Success     = 4; // 如果其他节点能匹配上 PrevLogIndex，PrevLogTerm 为 true；
+    bool  Success     = 2; // 如果其他节点能匹配上 PrevLogIndex，PrevLogTerm 为 true；
+    int64 ConflictTerm  = 3; // 冲突的条目的任期号
+    int64 ConflictIndex = 4; // 自己存储的那个冲突条目任期的最早的索引地址
 }
 
 message RequestVoteReq {
