@@ -1,3 +1,4 @@
 *.log
 .idea
 raft-state/
+raft-snap/
