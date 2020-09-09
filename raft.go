@@ -1,7 +1,6 @@
 package raft
 
 import (
-	"fmt"
 	"math/rand"
 	"sort"
 	"sync"
@@ -363,19 +362,19 @@ func (rf *Raft) eventChanLoop() {
 	}
 }
 
-func (rf *Raft) Submit(command Command) error {
+func (rf *Raft) Submit(command Command) (isLeader bool, err error) {
 	rf.Lock()
 	dlog("submit %s %s : %v", rf.name, rf.state.String(), command)
 	// 只有leader才能写入
 	if rf.state != Leader {
 		rf.Unlock()
-		return fmt.Errorf("state %s is not leader", rf.state.String())
+		return false, ErrNotLeader
 	}
 
 	log, err := newLogEntry(rf.getLastLogIndex()+1, rf.currentTerm, command)
 	if err != nil {
 		rf.Unlock()
-		return err
+		return true, err
 	}
 	rf.log = append(rf.log, log)
 	sendCh(rf.appendLogCh)
@@ -384,7 +383,7 @@ func (rf *Raft) Submit(command Command) error {
 
 	// 立即执行一次
 	rf.startAppendLog()
-	return nil
+	return true, nil
 }
 
 func (rf *Raft) MakeSnapshot(commitIdx uint64, snapshot []byte) {
@@ -401,7 +400,6 @@ func (rf *Raft) MakeSnapshot(commitIdx uint64, snapshot []byte) {
 	rf.lastIncludedIndex = commitIdx
 	rf.lastIncludedTerm = rf.log[lopPos].Term
 	rf.log = append(make([]*LogEntry, 0), rf.log[lopPos+1:]...)
-	fmt.Println(11111, rf.lastIncludedIndex, rf.lastIncludedTerm, lopPos, rf.log)
 	rf.saveStateToDisk()
 	rf.saveSnapshotToDisk(snapshot)
 }

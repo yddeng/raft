@@ -117,7 +117,7 @@ func TestMakeRaft_Calculation(t *testing.T) {
 }
 
 func TestMakeRaft_Snapshot(t *testing.T) {
-	debug = 1
+	//debug = 1
 	peers := map[string]string{
 		"1": "127.0.0.1:6000",
 		"2": "127.0.0.1:6001",
