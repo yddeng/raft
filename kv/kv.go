@@ -33,6 +33,8 @@ func (this *KV) Get(k string) (value string, ok bool) {
 }
 
 func (this *KV) packJson() []byte {
+	this.Lock()
+	defer this.Unlock()
 	data, err := json.Marshal(this.Data)
 	if err != nil {
 		fmt.Println("packJson", err)
@@ -42,6 +44,8 @@ func (this *KV) packJson() []byte {
 }
 
 func (this *KV) unpackJson(data []byte) {
+	this.Lock()
+	defer this.Unlock()
 	err := json.Unmarshal(data, &this.Data)
 	if err != nil {
 		fmt.Println("unpackJson", err)
@@ -116,6 +120,13 @@ func Start(peers map[string]string, name, addr string) {
 			cmd := e.Command.(*SetCmd)
 			fmt.Printf("raft %s event %v cmd %v\n", name, e, cmd)
 			kvStorage.Set(cmd.Key, cmd.Value)
+			// 每隔10条 一次快照
+			if e.CommandIndex%10 == 0 {
+				fmt.Printf("raft %s make snapshot\n", name)
+				rfMtx.Lock()
+				rf.MakeSnapshot(e.CommandIndex, kvStorage.packJson())
+				rfMtx.Unlock()
+			}
 		} else {
 			fmt.Printf("---- raft %s snapshot \n", name)
 			kvStorage.unpackJson(e.Snapshot)
