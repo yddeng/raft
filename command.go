@@ -65,7 +65,7 @@ func RegisterCommand(command Command) {
 }
 
 // Creates a new log entry associated with a log.
-func newLogEntry(index int64, term int64, command Command) (*LogEntry, error) {
+func newLogEntry(index uint64, term uint64, command Command) (*LogEntry, error) {
 	var buf bytes.Buffer
 	var commandName string
 	if command != nil {

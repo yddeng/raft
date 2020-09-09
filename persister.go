@@ -74,7 +74,7 @@ func (rf *Raft) installSnapshot() {
 	if data == nil || len(data) == 0 {
 		return
 	}
-
+	rf.lastApplied = rf.lastIncludedIndex
 	rf.applyMsgCh <- ApplyMsg{
 		CommandValid: false,
 		Snapshot:     data,

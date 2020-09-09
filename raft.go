@@ -34,8 +34,8 @@ type ApplyMsg struct {
 
 	// 向应用层提交日志
 	Command      Command
-	CommandIndex int64
-	CommandTerm  int64
+	CommandIndex uint64
+	CommandTerm  uint64
 
 	// 向应用层安装快照
 	Snapshot []byte
@@ -49,19 +49,19 @@ type Raft struct {
 	state State
 
 	// 所有服务器上持久存在的
-	currentTerm       int64       // 服务器最后一次知道的任期号（初始化为 0，持续递增）
+	currentTerm       uint64      // 服务器最后一次知道的任期号（初始化为 0，持续递增）
 	votedFor          string      // 当前任期内收到选票的候选人ID (没有为NULL)
-	log               []*LogEntry // 日志条目集；每一个条目包含一个用户状态机执行的指令，和收到时的任期号
-	lastIncludedIndex int64       // 快照中包含的最后日志条目的索引值 // first index is 0,-1
-	lastIncludedTerm  int64       // 快照中包含的最后日志条目的任期号 // first index is 0,-1
+	log               []*LogEntry // 日志条目集；每一个条目包含一个用户状态机执行的指令，和收到时的任期号 // first index is 1
+	lastIncludedIndex uint64      // 快照中包含的最后日志条目的索引值
+	lastIncludedTerm  uint64      // 快照中包含的最后日志条目的任期号
 
 	// 所有服务器上经常变的
-	commitIndex int64 // 已知的最大的已经被提交的日志条目的索引值 (初始化为 0，持续递增）// first index is 0,-1
-	lastApplied int64 // 最后提交到应用层的日志条目索引值（初始化为 0，持续递增）// first index is 0,-1
+	commitIndex uint64 // 已知的最大的已经被提交的日志条目的索引值 (初始化为 0，持续递增）
+	lastApplied uint64 // 最后提交到应用层的日志条目索引值（初始化为 0，持续递增）
 
 	// 在领导人里经常改变的 （选举后重新初始化）
-	nextIndex  map[string]int64 // 对于每一个服务器，需要发送给他的下一个日志条目的索引值（初始化为领导人最后索引值加一）
-	matchIndex map[string]int64 // 每个follower的log同步进度（初始为0），和nextIndex强关联
+	nextIndex  map[string]uint64 // 对于每一个服务器，需要发送给他的下一个日志条目的索引值（初始化为领导人最后索引值加一）
+	matchIndex map[string]uint64 // 每个follower的log同步进度（初始为0），和nextIndex强关联
 
 	// follower 与 leader 的心跳超时
 	heartbeatTimer *time.Timer
@@ -90,7 +90,7 @@ func (rf *Raft) beCandidate() {
 	go rf.startElection()
 }
 
-func (rf *Raft) beFollower(term int64) {
+func (rf *Raft) beFollower(term uint64) {
 	dlog("raft %s beFollower term %d", rf.name, term)
 	rf.state = Follower
 	rf.votedFor = NULL
@@ -104,8 +104,8 @@ func (rf *Raft) beLeader() {
 	}
 	dlog("raft %s beLeader term %d", rf.name, rf.currentTerm)
 	rf.state = Leader
-	rf.nextIndex = make(map[string]int64, len(rf.peers))
-	rf.matchIndex = make(map[string]int64, len(rf.peers))
+	rf.nextIndex = make(map[string]uint64, len(rf.peers))
+	rf.matchIndex = make(map[string]uint64, len(rf.peers))
 	// 初始化为领导人上一条日志索引+1
 	for name := range rf.peers {
 		rf.nextIndex[name] = rf.getLastLogIndex() + 1
@@ -255,7 +255,7 @@ func (rf *Raft) sendAppendLog(name string, end *ClientEnd) {
 		}
 
 		if resp.GetSuccess() {
-			rf.nextIndex[name] = req.GetPrevLogIndex() + int64(len(req.GetEntries())) + 1
+			rf.nextIndex[name] = req.GetPrevLogIndex() + uint64(len(req.GetEntries())) + 1
 			rf.matchIndex[name] = rf.nextIndex[name] - 1
 			// 更新commitIndex，如果被大多数 follower 复制，则提交。
 			rf.updateCommitIndex()
@@ -263,7 +263,7 @@ func (rf *Raft) sendAppendLog(name string, end *ClientEnd) {
 			// 在被跟随者拒绝之后，领导人就会减小 nextIndex 值并进行重试。最终 nextIndex 会在某个位置使得领导人和跟随者的日志达成一致。
 			if resp.GetConflictTerm() != -1 {
 				lastIndexOfTerm := -1
-				conflictTerm := resp.GetConflictTerm()
+				conflictTerm := uint64(resp.GetConflictTerm())
 				for i := len(rf.log) - 1; i >= 0; i-- {
 					if rf.log[i].Term == conflictTerm {
 						lastIndexOfTerm = i
@@ -271,12 +271,12 @@ func (rf *Raft) sendAppendLog(name string, end *ClientEnd) {
 					}
 				}
 				if lastIndexOfTerm >= 0 {
-					rf.nextIndex[name] = int64(lastIndexOfTerm) + 1
+					rf.nextIndex[name] = uint64(lastIndexOfTerm) + 1
 				} else {
-					rf.nextIndex[name] = resp.GetConflictIndex()
+					rf.nextIndex[name] = uint64(resp.GetConflictIndex())
 				}
 			} else {
-				rf.nextIndex[name] = resp.GetConflictIndex()
+				rf.nextIndex[name] = uint64(resp.GetConflictIndex())
 			}
 		}
 
@@ -318,7 +318,7 @@ func (rf *Raft) sendInstallSnapshot(name string, end *ClientEnd) {
 
 func (rf *Raft) updateCommitIndex() {
 	// 排序每一个 follower 的 matchIdx，取位置中间值，就是最大的
-	idxs := make([]int64, 0, len(rf.peers))
+	idxs := make([]uint64, 0, len(rf.peers))
 	for name := range rf.peers {
 		if name == rf.name {
 			idxs = append(idxs, rf.getLastLogIndex())
@@ -335,37 +335,32 @@ func (rf *Raft) updateCommitIndex() {
 }
 
 func (rf *Raft) eventChanLoop() {
+	defer dlog("raft %s commitChanLoop done", rf.name)
 	for {
 		select {
 		case <-rf.killCh:
 			return
 		case <-rf.commitNotifyCh:
 			rf.Lock()
-			var entries []*LogEntry
-			if rf.commitIndex > rf.lastApplied {
+			for rf.commitIndex > rf.lastApplied {
 				if rf.lastApplied < rf.lastIncludedIndex {
 					rf.lastApplied = rf.lastIncludedIndex
 				}
-				leftPos, rightPos := rf.index2LogPos(rf.lastApplied+1), rf.index2LogPos(rf.commitIndex+1)
-				entries = rf.log[leftPos:rightPos]
-				rf.lastApplied = rf.commitIndex
-			}
-			dlog("commitChanLoop entries=%v, savedLastApplied=%d commitIndex=%d", entries, rf.lastApplied, rf.commitIndex)
-			rf.Unlock()
-
-			for _, entry := range entries {
+				rf.lastApplied += 1
+				entry := rf.getLog(rf.lastApplied)
 				command, _ := newCommand(entry.GetCommandName(), entry.GetCommand())
+				// 堵塞后，进程不能进行
 				rf.applyMsgCh <- ApplyMsg{
 					CommandValid: true,
 					Command:      command,
 					CommandIndex: entry.GetIndex(),
 					CommandTerm:  entry.GetTerm(),
 				}
+				dlog("commitChanLoop entries=%v", entry)
 			}
-
+			rf.Unlock()
 		}
 	}
-	dlog("raft %s commitChanLoop done", rf.name)
 }
 
 func (rf *Raft) Submit(command Command) error {
@@ -392,7 +387,7 @@ func (rf *Raft) Submit(command Command) error {
 	return nil
 }
 
-func (rf *Raft) MakeSnapshot(commitIdx int64, snapshot []byte) {
+func (rf *Raft) MakeSnapshot(commitIdx uint64, snapshot []byte) {
 	rf.Lock()
 	defer rf.Unlock()
 	dlog("makeSnapshot raft %s state %s : commitIdx %d", rf.name, rf.state.String(), commitIdx)
@@ -411,10 +406,6 @@ func (rf *Raft) MakeSnapshot(commitIdx int64, snapshot []byte) {
 	rf.saveSnapshotToDisk(snapshot)
 }
 
-func init() {
-	rand.Seed(time.Now().Unix())
-}
-
 func Make(name string, peers map[string]string, applyMsgCh chan<- ApplyMsg) (rf *Raft) {
 	rf = new(Raft)
 	rf.name = name
@@ -422,13 +413,13 @@ func Make(name string, peers map[string]string, applyMsgCh chan<- ApplyMsg) (rf 
 	rf.state = Follower
 	rf.currentTerm = 0
 	rf.votedFor = NULL
-	rf.log = make([]*LogEntry, 0) // first index is 0
-	rf.lastIncludedIndex = -1     // first index is 0
-	rf.lastIncludedTerm = -1      // first index is 0
-	rf.commitIndex = -1           // first index is 0
-	rf.lastApplied = -1           // first index is 0
-	rf.nextIndex = make(map[string]int64, len(peers))
-	rf.matchIndex = make(map[string]int64, len(peers))
+	rf.log = make([]*LogEntry, 0)
+	rf.lastIncludedIndex = 0
+	rf.lastIncludedTerm = 0
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	rf.nextIndex = make(map[string]uint64, len(peers))
+	rf.matchIndex = make(map[string]uint64, len(peers))
 	rf.heartbeatTimer = time.NewTimer(1000 * time.Millisecond)
 	rf.voteCh = make(chan struct{}, 1)
 	rf.appendLogCh = make(chan struct{}, 1)
@@ -454,4 +445,8 @@ func Make(name string, peers map[string]string, applyMsgCh chan<- ApplyMsg) (rf 
 	// event loop
 	go rf.eventChanLoop()
 	return
+}
+
+func init() {
+	rand.Seed(time.Now().Unix())
 }

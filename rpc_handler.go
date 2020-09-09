@@ -130,18 +130,18 @@ func (rf *Raft) AppendEntries(req *AppendEntriesReq, resp *AppendEntriesResp) (e
 		// 日志在 prevLogIndex 位置处的日志条目的索引号和 prevLogIndex 不匹配
 		if rf.getLastLogIndex() < req.GetPrevLogIndex() {
 			resp.Success = false
-			resp.ConflictIndex = rf.getLastLogIndex()
+			resp.ConflictIndex = int64(rf.getLastLogIndex())
 			return
 		}
 
 		// 日志在 prevLogIndex 位置处的日志条目的任期号和 prevLogTerm 不匹配
 		if rf.getLog(req.GetPrevLogIndex()).Term != req.GetPrevLogTerm() {
 			resp.Success = false
-			resp.ConflictTerm = rf.getLog(req.GetPrevLogIndex()).Term
+			resp.ConflictTerm = int64(rf.getLog(req.GetPrevLogIndex()).Term)
 			// 找到冲突term的首次出现位置，最差就是PrevLogIndex
 			for index := rf.lastIncludedIndex + 1; index <= req.GetPrevLogIndex(); index++ {
-				if rf.getLog(req.GetPrevLogIndex()).Term == resp.ConflictTerm {
-					resp.ConflictIndex = index
+				if int64(rf.getLog(req.GetPrevLogIndex()).Term) == resp.ConflictTerm {
+					resp.ConflictIndex = int64(index)
 					break
 				}
 			}
@@ -224,20 +224,17 @@ func (rf *Raft) InstallSnapshot(req *InstallSnapshotReq, resp *InstallSnapshotRe
 		Snapshot:     req.GetData(),
 	}
 
-	// 如果 done 是 false，则继续等待更多的数据
-	// 保存快照文件，丢弃具有较小索引的任何现有或部分快照
-	// 使用快照重置状态机（并加载快照的集群配置）
 	return
 }
 
-func min(x, y int64) int64 {
+func min(x, y uint64) uint64 {
 	if x < y {
 		return x
 	}
 	return y
 }
 
-func max(x, y int64) int64 {
+func max(x, y uint64) uint64 {
 	if x > y {
 		return x
 	}
