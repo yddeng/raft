@@ -4,7 +4,8 @@
 
 ## raft的应用
 
-[一致性kv](kv/readme.md) 简单实现一致性kv数据库
+**[一致性kv](kv/readme.md)**
+> 简单实现一致性kv数据库
 
 ## 相关资料
 
